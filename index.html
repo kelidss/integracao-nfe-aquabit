@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentação Técnica: Integração NFe — Sistema Aquabit</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            line-height: 1.6;
+            color: #333;
+            background-color: #fdfdfd;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 900px;
+            margin: 20px auto;
+            padding: 30px;
+            background-color: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 2.2em;
+            text-align: center;
+        }
+        h2 {
+            font-size: 1.8em;
+        }
+        h3 {
+            font-size: 1.4em;
+            border-bottom: 1px solid #bdc3c7;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 0.95em;
+        }
+        th, td {
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+            color: #34495e;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        code {
+            font-family: "Courier New", Courier, monospace;
+            background-color: #ecf0f1;
+            padding: 3px 5px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background-color: #2d3436;
+            color: #dfe6e9;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        .meta-info {
+            text-align: center;
+            color: #7f8c8d;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+        .fluxograma {
+            text-align: center;
+            margin: 30px 0;
+        }
+        .fluxograma img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Documentação Técnica: Integração de Nota Fiscal Eletrônica (NFe) no Sistema Aquabit</h1>
+        <p class="meta-info">
+            <strong>Versão:</strong> 1.0 | <strong>Data:</strong> 26 de Setembro de 2025
+        </p>
+
+        <hr>
+
+        <h2>1. Visão Geral</h2>
+        <p>Este documento detalha a arquitetura e o plano de implementação para a integração de sistemas de emissão de Nota Fiscal Eletrônica (NFe) na plataforma Aquabit. O objetivo é automatizar e gerenciar o ciclo de vida das notas fiscais geradas a partir de vendas no sistema.</p>
+
+        <h3>1.1. Objetivos Principais</h3>
+        <ul>
+            <li><strong>Automatizar a Emissão:</strong> Gerar NFes automaticamente para todas as vendas concluídas na plataforma.</li>
+            <li><strong>Múltiplos Provedores:</strong> Garantir flexibilidade através da integração com diversos provedores de NFe, incluindo <strong>Nuvem Fiscal</strong>, <strong>Focus NFe</strong> e <strong>Revgás</strong>.</li>
+            <li><strong>Gestão Completa:</strong> Permitir a consulta de status, listagem e o download do Documento Auxiliar da Nota Fiscal Eletrônica (DANFE) e do arquivo XML.</li>
+            <li><strong>Rastreabilidade:</strong> Manter um histórico detalhado e logs completos de todas as transações fiscais para auditoria e controle.</li>
+        </ul>
+
+        <h3>1.2. Tabelas Base de Dados</h3>
+        <p>A integração utilizará as seguintes tabelas do banco de dados como fonte de informação para a geração das notas fiscais:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Tabela</th>
+                    <th>Descrição</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>core_movimentacao</code></td>
+                    <td>Armazena as movimentações financeiras gerais das vendas.</td>
+                </tr>
+                <tr>
+                    <td><code>core_movimentacaoitem</code></td>
+                    <td>Detalha os itens específicos de cada movimentação.</td>
+                </tr>
+                <tr>
+                    <td><code>core_venda</code></td>
+                    <td>Contém os dados específicos e consolidados de cada venda.</td>
+                </tr>
+                <tr>
+                    <td><code>core_lotetanquevenda</code></td>
+                    <td>Associa os produtos vendidos aos seus respectivos lotes e tanques.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>2. Arquitetura da Solução</h2>
+        <p>A solução foi desenhada de forma modular, utilizando uma arquitetura baseada em <strong>Models</strong>, <strong>Services</strong> e <strong>Adapters</strong> para garantir escalabilidade e fácil manutenção.</p>
+
+        <h3>2.1. Estrutura de Models</h3>
+        <p>Os <code>models</code> abaixo representam a estrutura de dados no banco de dados para gerenciar provedores, configurações, notas fiscais e logs.</p>
+        <pre><code># apps/integracao/models.py
+
+class ProvedorNFe(BaseClass):
+    """
+    Representa os provedores de NFe disponíveis no sistema.
+    """
+    nome = models.CharField(max_length=100)
+    slug = models.SlugField(unique=True)
+    api_url = models.URLField()
+    ativo = models.BooleanField(default=True)
+
+class ConfiguracaoNFe(BaseClass):
+    """
+    Armazena as configurações de NFe para cada propriedade (cliente),
+    incluindo credenciais e ambiente de operação.
+    """
+    propriedade = models.ForeignKey('core.Propriedade', on_delete=models.CASCADE)
+    provedor = models.ForeignKey(ProvedorNFe, on_delete=models.CASCADE)
+    api_token = models.CharField(max_length=255)
+    ambiente = models.CharField(max_length=20)  # 'homologacao' ou 'producao'
+    certificado_digital = models.TextField(blank=True)
+    senha_certificado = models.CharField(max_length=100, blank=True)
+
+class NotaFiscal(BaseClass):
+    """
+    Registra cada NFe emitida, seu status, chave de acesso e
+    armazena os arquivos XML e DANFE.
+    """
+    venda = models.ForeignKey('core.Venda', on_delete=models.CASCADE)
+    provedor = models.ForeignKey(ProvedorNFe, on_delete=models.CASCADE)
+    numero_nota = models.CharField(max_length=50)
+    serie = models.CharField(max_length=10)
+    chave_acesso = models.CharField(max_length=44)
+    status = models.CharField(max_length=50)
+    data_emissao = models.DateTimeField()
+    xml_content = models.TextField(blank=True)
+    pdf_danfe = models.FileField(upload_to='nfe/danfe/', blank=True)
+    protocolo_autorizacao = models.CharField(max_length=100, blank=True)
+
+class LogNFe(BaseClass):
+    """
+    Mantém um log detalhado de todas as operações relacionadas a uma NFe
+    para fins de depuração e auditoria.
+    """
+    nota_fiscal = models.ForeignKey(NotaFiscal, on_delete=models.CASCADE)
+    operacao = models.CharField(max_length=50)  # 'emissao', 'consulta', 'cancelamento'
+    status_code = models.IntegerField()
+    resposta = models.TextField()
+    erro = models.TextField(blank=True)
+</code></pre>
+
+        <h3>2.2. Camada de Serviço (Services)</h3>
+        <p>O <code>NFEService</code> atua como a camada central de lógica de negócios, orquestrando as operações de NFe e utilizando um padrão de <em>Factory</em> para selecionar o <em>Adapter</em> correto para cada provedor.</p>
+        <pre><code># apps/integracao/services/nfe_service.py
+
+class NFEService:
+    """
+    Serviço base para orquestrar as operações de NFe.
+    """
+
+    def __init__(self, configuracao: ConfiguracaoNFe):
+        self.configuracao = configuracao
+        self.adapter = self._get_adapter()
+
+    def _get_adapter(self):
+        """
+        Factory Method que instancia o adapter correto com base
+        no provedor configurado.
+        """
+        adapters = {
+            'nuvem-fiscal': NuvemFiscalAdapter,
+            'focus-nfe': FocusNFeAdapter,
+            'revgas': RevgasAdapter,
+        }
+        adapter_class = adapters.get(self.configuracao.provedor.slug)
+        if not adapter_class:
+            raise ValueError("Provedor de NFe não suportado.")
+        return adapter_class(self.configuracao)
+
+    def emitir_nfe(self, venda: Venda) -> NotaFiscal:
+        """
+        Coordena o processo de emissão de uma NFe para uma venda específica.
+        """
+        # ...lógica de negócio...
+        return self.adapter.emitir(venda)
+
+    def consultar_nfe(self, nota_fiscal: NotaFiscal) -> dict:
+        """
+        Consulta o status atual de uma NFe já emitida.
+        """
+        # ...lógica de negócio...
+        return self.adapter.consultar(nota_fiscal)
+
+    def baixar_danfe(self, nota_fiscal: NotaFiscal) -> bytes:
+        """
+        Realiza o download do PDF da DANFE.
+        """
+        # ...lógica de negócio...
+        return self.adapter.baixar_pdf(nota_fiscal)
+
+    def baixar_xml(self, nota_fiscal: NotaFiscal) -> bytes:
+        """
+        Realiza o download do arquivo XML da NFe.
+        """
+        # ...lógica de negócio...
+        return self.adapter.baixar_xml(nota_fiscal)
+</code></pre>
+
+        <h2>3. Fluxo de Integração</h2>
+        <p>O processo de emissão de uma NFe segue o fluxo automatizado abaixo:</p>
+        <div class="fluxograma">
+            <img src="nf.jpg" alt="Fluxograma de Integração NFe">
+        </div>
+
+        <h2>4. Endpoints da API</h2>
+        <p>A gestão da integração será realizada através dos seguintes endpoints na API <code>v2</code>.</p>
+
+        <h3>4.1. Notas Fiscais (<code>/api/v2/nfe/</code>)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Método</th>
+                    <th>Endpoint</th>
+                    <th>Descrição</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/</code></td>
+                    <td>Lista todas as NFes emitidas com filtros.</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/</code></td>
+                    <td>Cria um registro de Nota Fiscal (preparação).</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Detalha uma NFe específica.</td>
+                </tr>
+                <tr>
+                    <td><code>PUT</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Atualiza os dados de uma NFe (uso restrito).</td>
+                </tr>
+                <tr>
+                    <td><code>DELETE</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Remove um registro de NFe (cancelamento lógico).</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/{id}/emitir/</code></td>
+                    <td><strong>Dispara o processo de emissão da NFe.</strong></td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/{id}/consultar/</code></td>
+                    <td>Consulta o status mais recente da NFe no provedor.</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/{id}/baixar_danfe/</code></td>
+                    <td>Realiza o download do arquivo PDF da DANFE.</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/{id}/baixar_xml/</code></td>
+                    <td>Realiza o download do arquivo XML autorizado.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>4.2. Configurações (<code>/api/v2/configuracao-nfe/</code>)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Método</th>
+                    <th>Endpoint</th>
+                    <th>Descrição</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/</code></td>
+                    <td>Lista todas as configurações de NFe.</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/</code></td>
+                    <td>Cria uma nova configuração para uma propriedade.</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Detalha uma configuração específica.</td>
+                </tr>
+                <tr>
+                    <td><code>PUT</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Atualiza uma configuração existente.</td>
+                </tr>
+                <tr>
+                    <td><code>DELETE</code></td>
+                    <td><code>/{id}/</code></td>
+                    <td>Remove uma configuração.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>5. Deployment e Configuração</h2>
+        <h3>5.1. Variáveis de Ambiente</h3>
+        <p>As seguintes variáveis de ambiente devem ser configuradas para o correto funcionamento da integração:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Variável</th>
+                    <th>Descrição</th>
+                    <th>Exemplo</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>NFE_DEFAULT_PROVIDER</code></td>
+                    <td>Provedor padrão a ser utilizado.</td>
+                    <td><code>nuvem-fiscal</code></td>
+                </tr>
+                <tr>
+                    <td><code>NFE_TIMEOUT</code></td>
+                    <td>Timeout em segundos para as requisições à API.</td>
+                    <td><code>30</code></td>
+                </tr>
+                <tr>
+                    <td><code>NFE_MAX_RETRIES</code></td>
+                    <td>Número máximo de tentativas em caso de falha.</td>
+                    <td><code>3</code></td>
+                </tr>
+                <tr>
+                    <td><code>NFE_RETRY_DELAY</code></td>
+                    <td>Atraso em segundos entre as tentativas.</td>
+                    <td><code>5</code></td>
+                </tr>
+                <tr>
+                    <td><code>NUVEM_FISCAL_BASE_URL</code></td>
+                    <td>URL base da API da Nuvem Fiscal.</td>
+                    <td><code>https://api.nuvemfiscal.com.br</code></td>
+                </tr>
+                <tr>
+                    <td><code>FOCUS_NFE_BASE_URL</code></td>
+                    <td>URL base da API da Focus NFe.</td>
+                    <td><code>https://api.focusnfe.com.br</code></td>
+                </tr>
+                <tr>
+                    <td><code>REVGAS_BASE_URL</code></td>
+                    <td>URL base da API da Revgás.</td>
+                    <td><code>https://revgas.stoplight.io</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>5.2. Configuração de Filas (Celery)</h3>
+        <p>Para garantir que a emissão de notas fiscais não impacte a performance da aplicação principal, as operações serão processadas de forma assíncrona utilizando Celery. As tarefas serão roteadas para uma fila dedicada chamada <code>nfe</code>.</p>
+        <pre><code># settings.py
+
+CELERY_ROUTES = {
+    'apps.integracao.tasks.emitir_nfe': {'queue': 'nfe'},
+    'apps.integracao.tasks.consultar_status_nfe': {'queue': 'nfe'},
+}</code></pre>
+    </div>
+</body>
+</html>
