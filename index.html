@@ -149,8 +149,9 @@
         <h3>1.3. Análise dos Requisitos Mínimos para Emissão de NFe</h3>
         <p>Para garantir a conformidade fiscal e a correta emissão das NFes, é necessário analisar as tabelas existentes e identificar os campos obrigatórios. Abaixo estão os requisitos mínimos organizados por categoria:</p>
 
-        <h4>1.3.1. Dados do Emitente (Obrigatórios)</h4>
-        <p>Estes dados devem estar configurados na propriedade/empresa:</p>
+    <h4>1.3.1. Dados do Emitente (Obrigatórios)</h4>
+    <p>Estes dados devem estar configurados na propriedade/empresa (p.ex. tabela <code>core_perfilpropriedade</code>):</p>
+    <p><em>Nota:</em> Recomendamos armazenar os dados do emitente na tabela <code>core_perfilpropriedade</code> ou equivalente, que contenha CNPJ, inscrição estadual, razão social, endereço e regime tributário. Isso facilita a reutilização para múltiplas propriedades/postos.</p>
         <ul>
             <li><strong>CNPJ:</strong> Cadastro Nacional da Pessoa Jurídica do emitente</li>
             <li><strong>Inscrição Estadual:</strong> Para identificação fiscal estadual</li>
@@ -307,6 +308,7 @@ class ProvedorNFe(BaseClass):
     api_url = models.URLField()
     ativo = models.BooleanField(default=True)
 
+
 class ConfiguracaoNFe(BaseClass):
     """
     Armazena as configurações de NFe para cada propriedade (cliente),
@@ -319,32 +321,40 @@ class ConfiguracaoNFe(BaseClass):
     certificado_digital = models.TextField(blank=True)
     senha_certificado = models.CharField(max_length=100, blank=True)
 
+
 class NotaFiscal(BaseClass):
     """
     Registra cada NFe emitida, seu status, chave de acesso e
-    armazena os arquivos XML e DANFE.
+    armazena os arquivos XML e DANFE. Também persiste o retorno bruto
+    da API do provedor (JSON/text) e o código de status HTTP.
     """
     movimentacao = models.ForeignKey('core.Movimentacao', on_delete=models.CASCADE)
     provedor = models.ForeignKey(ProvedorNFe, on_delete=models.CASCADE)
-    numero_nota = models.CharField(max_length=50)
-    serie = models.CharField(max_length=10)
-    chave_acesso = models.CharField(max_length=44)
+    numero_nota = models.CharField(max_length=50, blank=True)
+    serie = models.CharField(max_length=10, blank=True)
+    chave_acesso = models.CharField(max_length=44, blank=True)
     status = models.CharField(max_length=50)
-    data_emissao = models.DateTimeField()
+    data_emissao = models.DateTimeField(null=True, blank=True)
     xml_content = models.TextField(blank=True)
     pdf_danfe = models.FileField(upload_to='nfe/danfe/', blank=True)
     protocolo_autorizacao = models.CharField(max_length=100, blank=True)
+    provedor_response = models.TextField(blank=True)  # JSON/text com retorno do provedor
+    provedor_status_code = models.IntegerField(null=True, blank=True)
+
 
 class LogNFe(BaseClass):
     """
     Mantém um log detalhado de todas as operações relacionadas a uma NFe
-    para fins de depuração e auditoria.
+    para fins de depuração e auditoria. Cada entrada deve guardar request
+    e response quando aplicável.
     """
-    nota_fiscal = models.ForeignKey(NotaFiscal, on_delete=models.CASCADE)
-    operacao = models.CharField(max_length=50)  # 'emissao', 'consulta', 'cancelamento'
-    status_code = models.IntegerField()
-    resposta = models.TextField()
-    erro = models.TextField(blank=True)
+    nota_fiscal = models.ForeignKey(NotaFiscal, on_delete=models.CASCADE, related_name='logs')
+    operacao = models.CharField(max_length=50)  # 'emissao', 'consulta', 'cancelamento', 'webhook'
+    request_payload = models.TextField(blank=True)
+    response_payload = models.TextField(blank=True)
+    status_code = models.IntegerField(null=True, blank=True)
+    mensagem = models.TextField(blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
 </code></pre>
 
         <h3>2.2. Camada de Serviço (Services)</h3>
@@ -402,6 +412,362 @@ class NFEService:
         return self.adapter.baixar_xml(nota_fiscal)
 </code></pre>
 
+        <h3>2.3. Modelos detalhados e DDL</h3>
+        <p>Para evitar ambiguidades, abaixo há uma especificação detalhada dos campos principais das tabelas envolvidas na integração (tipos propostos, constraints e observações).</p>
+
+        <h4>2.3.1. Tabela <code>integracao_notafiscal</code> (proposta)</h4>
+        <pre><code>-- SQL exemplo (PostgreSQL)
+CREATE TABLE integracao_notafiscal (
+  id SERIAL PRIMARY KEY,
+  movimentacao_id INTEGER NOT NULL REFERENCES core_movimentacao(id),
+  provedor_id INTEGER NOT NULL REFERENCES integracao_provedornfe(id),
+  numero_nota VARCHAR(50),
+  serie VARCHAR(10),
+  chave_acesso CHAR(44),
+  status VARCHAR(50) NOT NULL,
+  data_emissao TIMESTAMP,
+  xml_content TEXT,
+  pdf_danfe_path VARCHAR(255),
+  protocolo_autorizacao VARCHAR(100),
+  provedor_response TEXT, -- armazena JSON/texto com retorno da API
+  provedor_status_code INTEGER,
+  criado_em TIMESTAMP DEFAULT now(),
+  atualizado_em TIMESTAMP DEFAULT now()
+);
+</code></pre>
+
+        <h4>2.3.2. Tabela <code>integracao_lognfe</code> (proposta)</h4>
+        <pre><code>-- SQL exemplo (PostgreSQL)
+CREATE TABLE integracao_lognfe (
+  id SERIAL PRIMARY KEY,
+  notafiscal_id INTEGER NOT NULL REFERENCES integracao_notafiscal(id),
+  operacao VARCHAR(50) NOT NULL, -- 'emissao', 'consulta', 'cancelamento', 'webhook'
+  request_payload TEXT,
+  response_payload TEXT,
+  status_code INTEGER,
+  mensagem TEXT,
+  criado_em TIMESTAMP DEFAULT now()
+);
+</code></pre>
+
+        <h4>2.3.3. Observações sobre tipos e tamanho</h4>
+        <ul>
+            <li>Campos que recebem JSON (por ex. <code>provedor_response</code>) são armazenados como TEXT para evitar dependência de JSONB mas podem ser convertidos para JSONB quando necessário.</li>
+            <li>Guarde caminhos de arquivos PDF em vez de blobs na tabela (ex.: S3/Storage local).</li>
+            <li>Adicione índices em <code>movimentacao_id</code> e <code>chave_acesso</code> para consultas rápidas.</li>
+        </ul>
+
+                <h4>2.3.4. Tabelas sugeridas: <code>nfe</code> e <code>nfe_logs</code> (persistência de retornos da provedora)</h4>
+                <p>Abaixo uma DDL proposta, pensada para PostgreSQL. Observações principais: o campo <code>provider_return</code> é do tipo <code>JSONB</code> para facilitar consultas/filtragem por chaves específicas; a coluna <code>emitente_id</code> referencia <code>core_perfilpropriedade(id)</code> conforme alinhado.</p>
+                <pre><code>-- Tabela principal de NFe
+CREATE TABLE IF NOT EXISTS nfe (
+    id BIGSERIAL PRIMARY KEY,
+    emitente_id BIGINT REFERENCES core_perfilpropriedade(id) ON DELETE SET NULL,
+    movimentacao_id BIGINT REFERENCES core_movimentacao(id) ON DELETE SET NULL,
+    chave VARCHAR(44) UNIQUE NOT NULL,
+    numero VARCHAR(50),
+    serie VARCHAR(20),
+    modelo VARCHAR(10),
+    data_emissao TIMESTAMPTZ,
+    total NUMERIC(14,2),
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    provider VARCHAR(100),
+    provider_return JSONB, -- retorno bruto/estruturado da API provedora
+    provider_return_received_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nfe_chave ON nfe(chave);
+CREATE INDEX IF NOT EXISTS idx_nfe_emitente_id ON nfe(emitente_id);
+
+-- Tabela de logs históricos de interação com provedores (requests/responses/erros)
+CREATE TABLE IF NOT EXISTS nfe_logs (
+    id BIGSERIAL PRIMARY KEY,
+    nfe_id BIGINT NOT NULL REFERENCES nfe(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    direction VARCHAR(10) NOT NULL CHECK (direction IN ('outbound','inbound')),
+    endpoint VARCHAR(255),
+    status_code INTEGER,
+    request JSONB,
+    response JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nfe_logs_nfe_id ON nfe_logs(nfe_id);
+CREATE INDEX IF NOT EXISTS idx_nfe_logs_created_at ON nfe_logs(created_at);
+</code></pre>
+
+                <p>Com esse desenho, a rota <code>/api/v2/nfe/</code> deve:</p>
+                <ul>
+                        <li>Criar/atualizar o registro em <code>nfe</code> (idempotência por <code>chave</code> quando aplicável).</li>
+                        <li>Persistir o retorno da API provedora em <code>nfe.provider_return</code> e marcar <code>provider_return_received_at</code>.</li>
+                        <li>Inserir entradas em <code>nfe_logs</code> para cada tentativa/response, com <code>direction</code> = 'outbound' para o request e 'inbound' para a resposta do provedor.</li>
+                </ul>
+
+        <h3>2.4. Contrato da API (API v2)</h3>
+        <p>Documentação mínima dos endpoints principais com exemplos de request/response.</p>
+
+        <h4>2.4.1. POST /api/v2/nfe/ (Criar/Pré-registrar NFe)</h4>
+        <p>Função: criar um registro de NFe a partir de uma movimentação e, opcionalmente, disparar emissão assíncrona.</p>
+        <pre><code>Request JSON (exemplo):
+{
+  "movimentacao_id": 12345,
+  "serie": "1",
+  "modelo": "55", -- modelo da NFe
+  "itens": [
+    {"categoria_id": 10, "quantidade": 100.0, "valor_unitario": 4.59}
+  ],
+  "emitir": false -- se true, enfileira tarefa de emissão
+}
+
+Response 201 (exemplo):
+{
+  "id": 987,
+  "movimentacao_id": 12345,
+  "status": "preparada"
+}
+</code></pre>
+
+        <h4>2.4.2. POST /api/v2/nfe/{id}/emitir/</h4>
+        <p>Enfileira a emissão da NFe. A resposta inicial confirma enfileiramento.</p>
+        <pre><code>Response 202 (exemplo):
+{ "detail": "Emissão enfileirada" }
+</code></pre>
+
+        <h4>2.4.3. GET /api/v2/nfe/{id}/consultar/</h4>
+        <p>Consulta estado atual consultando o provedor e atualizando localmente <code>nota_fiscal.provedor_response</code>.</p>
+
+        <h3>2.5. Exemplo de Adapter Revgás (pseudo-código / Python)</h3>
+        <pre><code>class RevgasAdapter:
+    def __init__(self, configuracao: ConfiguracaoNFe):
+        self.base_url = configuracao.provedor.api_url
+        self.token = configuracao.api_token
+
+    def emitir(self, movimentacao: Movimentacao) -> NotaFiscal:
+        payload = self._build_payload(movimentacao)
+        resp = requests.post(f"{self.base_url}/nfe/emissao", json=payload, headers={"Authorization": f"Bearer {self.token}"}, timeout=30)
+        nota = NotaFiscal.objects.create(
+            movimentacao=movimentacao,
+            provedor=configuracao.provedor,
+            status='processing',
+            provedor_response=resp.text,
+            provedor_status_code=resp.status_code
+        )
+        LogNFe.objects.create(nota_fiscal=nota, operacao='emissao', request_payload=json.dumps(payload), response_payload=resp.text, status_code=resp.status_code)
+        if resp.status_code == 200:
+            data = resp.json()
+            nota.numero_nota = data.get('numero')
+            nota.serie = data.get('serie')
+            nota.chave_acesso = data.get('chave')
+            nota.status = data.get('status')
+            nota.save()
+        return nota
+</code></pre>
+
+        <h3>2.6. Tarefas assíncronas (Celery)</h3>
+        <p>Exemplo de task que processa a emissão assincronamente:</p>
+        <pre><code>from celery import shared_task
+
+@shared_task(bind=True)
+def emitir_nfe_task(self, nota_id: int):
+    nota = NotaFiscal.objects.get(pk=nota_id)
+    adapter = NFEService(nota.configuracao).adapter
+    try:
+        result = adapter.emitir(nota.movimentacao)
+        # atualizar nota com retorno
+    except Exception as exc:
+        LogNFe.objects.create(nota_fiscal=nota, operacao='emissao', mensagem=str(exc))
+        raise self.retry(exc=exc, countdown=60)
+</code></pre>
+
+        <h3>2.7. Logs, auditoria e retenção</h3>
+        <ul>
+            <li>Persistir respostas brutas do provedor em <code>nota_fiscal.provedor_response</code> permite auditoria e reprocessamento.</li>
+            <li>Logs detalhados em <code>integracao_lognfe</code> com payloads e códigos HTTP permitem investigar problemas.</li>
+            <li>Política de retenção: manter logs de até 1 ano por padrão; exportar para storage frio se necessário.</li>
+        </ul>
+
+        <h3>2.8. Mapeamento core_movimentacao → XML NFe (exemplo)</h3>
+        <p>Mapeie campos da sua movimentação para as tags da NFe:</p>
+        <ul>
+            <li><strong>movimentacao.id</strong> → nNF (número da nota, se gerado localmente)</li>
+            <li><strong>movimentacao.data</strong> → dhEmi</li>
+            <li><strong>movimentacao.total</strong> → vNF</li>
+            <li><strong>movimentacaoitem.quantidade</strong> → qCom</li>
+            <li><strong>categoria.ncm</strong> → NCM</li>
+            <li><strong>categoria.cfop</strong> → CFOP</li>
+            <li><strong>cliente.cnpj/cpf</strong> → dest.CPF/CNPJ</li>
+        </ul>
+
+        <h3>2.9. Testes, QA e checklist de homologação</h3>
+        <ol>
+            <li>Validar geração de payload conforme especificação da Revgás (schema/fields obrigatórios).</li>
+            <li>Testar cenário de sucesso (200) e erro (4xx/5xx) e verificar logs gravados.</li>
+            <li>Testar reprocessamento de NFes com falha temporária (retry)</li>
+            <li>Verificar campos fiscais obrigatórios (NCM, CFOP, CST, ANP quando aplicável).</li>
+            <li>Testar download de DANFE e XML autoritativos após emissão.</li>
+        </ol>
+
+        <h3>2.10. Segurança e credenciais</h3>
+        <p>Boas práticas:</p>
+        <ul>
+            <li>Armazenar tokens de API em <code>ConfiguracaoNFe.api_token</code> criptografados (ciphertext).</li>
+            <li>Restringir acessos via roles/permissions na API interna para ações de emissão.</li>
+            <li>Registar auditoria de quem disparou emissões manuais.</li>
+        </ul>
+
+        <h3>2.11. Deployment</h3>
+        <p>Resumo mínimo para deploy:</p>
+        <ol>
+            <li>Configurar variáveis de ambiente (tokens, timeouts, base_url da Revgás).</li>
+            <li>Executar migrations para criar novas tabelas <code>integracao_notafiscal</code> e <code>integracao_lognfe</code>.</li>
+            <li>Iniciar worker Celery dedicado à fila <code>nfe</code>.</li>
+            <li>Monitorar filas e taxas de erro; configurar alertas para falhas repetidas.</li>
+        </ol>
+
+                <h3>2.12. Mapeamento do Emitente → `core_perfilpropriedade`</h3>
+                <p>Recomendamos centralizar os dados do emitente na tabela <code>core_perfilpropriedade</code>. Abaixo o mapeamento sugerido (campo sugerido → descrição):</p>
+                <table>
+                        <thead>
+                                <tr><th>Campo</th><th>Descrição</th></tr>
+                        </thead>
+                        <tbody>
+                                <tr><td><code>cnpj</code></td><td>CNPJ do emitente (apenas dígitos)</td></tr>
+                                <tr><td><code>inscricao_estadual</code></td><td>Inscrição Estadual</td></tr>
+                                <tr><td><code>razao_social</code></td><td>Razão social completa</td></tr>
+                                <tr><td><code>nome_fantasia</code></td><td>Nome fantasia (opcional)</td></tr>
+                                <tr><td><code>endereco_logradouro</code></td><td>Logradouro</td></tr>
+                                <tr><td><code>endereco_numero</code></td><td>Número</td></tr>
+                                <tr><td><code>endereco_bairro</code></td><td>Bairro</td></tr>
+                                <tr><td><code>cidade</code></td><td>Cidade</td></tr>
+                                <tr><td><code>uf</code></td><td>Unidade federativa</td></tr>
+                                <tr><td><code>cep</code></td><td>CEP</td></tr>
+                                <tr><td><code>regime_tributario</code></td><td>Ex.: 1 - Simples Nacional, 2 - Lucro Presumido</td></tr>
+                        </tbody>
+                </table>
+
+                <h3>2.13. Implementação exemplo (Django)</h3>
+                <p>Abaixo há exemplos práticos de como implementar os models, serializers e viewsets para a integração.</p>
+
+                <h4>2.13.1. models.py (exemplo)</h4>
+                <pre><code>from django.db import models
+
+class ProvedorNFe(models.Model):
+        nome = models.CharField(max_length=100)
+        slug = models.SlugField(unique=True)
+        api_url = models.URLField()
+        ativo = models.BooleanField(default=True)
+
+class NotaFiscal(models.Model):
+        movimentacao = models.ForeignKey('core.Movimentacao', on_delete=models.CASCADE)
+        provedor = models.ForeignKey(ProvedorNFe, on_delete=models.CASCADE)
+        numero_nota = models.CharField(max_length=50, blank=True)
+        serie = models.CharField(max_length=10, blank=True)
+        chave_acesso = models.CharField(max_length=44, blank=True)
+        status = models.CharField(max_length=50)
+        data_emissao = models.DateTimeField(null=True, blank=True)
+        xml_content = models.TextField(blank=True)
+        pdf_danfe = models.FileField(upload_to='nfe/danfe/', blank=True)
+        protocolo_autorizacao = models.CharField(max_length=100, blank=True)
+        provedor_response = models.TextField(blank=True)
+        provedor_status_code = models.IntegerField(null=True, blank=True)
+        criado_em = models.DateTimeField(auto_now_add=True)
+        atualizado_em = models.DateTimeField(auto_now=True)
+
+class LogNFe(models.Model):
+        nota_fiscal = models.ForeignKey(NotaFiscal, related_name='logs', on_delete=models.CASCADE)
+        operacao = models.CharField(max_length=50)
+        request_payload = models.TextField(blank=True)
+        response_payload = models.TextField(blank=True)
+        status_code = models.IntegerField(null=True, blank=True)
+        mensagem = models.TextField(blank=True)
+        criado_em = models.DateTimeField(auto_now_add=True)
+</code></pre>
+
+                <h4>2.13.2. serializers.py (exemplo)</h4>
+                <pre><code>from rest_framework import serializers
+from .models import NotaFiscal, LogNFe
+
+class NotaFiscalSerializer(serializers.ModelSerializer):
+        class Meta:
+                model = NotaFiscal
+                fields = '__all__'
+
+class LogNFeSerializer(serializers.ModelSerializer):
+        class Meta:
+                model = LogNFe
+                fields = '__all__'
+</code></pre>
+
+                <h4>2.13.3. views.py / viewsets (exemplo)</h4>
+                <pre><code>from rest_framework import viewsets
+from .models import NotaFiscal, LogNFe
+from .serializers import NotaFiscalSerializer, LogNFeSerializer
+
+class NotaFiscalViewSet(viewsets.ModelViewSet):
+        queryset = NotaFiscal.objects.all()
+        serializer_class = NotaFiscalSerializer
+
+        # action para emitir
+        # @action(detail=True, methods=['post'])
+        # def emitir(self, request, pk=None):
+        #     # enfileira tarefa Celery
+        #     pass
+
+class LogNFeViewSet(viewsets.ModelViewSet):
+        queryset = LogNFe.objects.all()
+        serializer_class = LogNFeSerializer
+</code></pre>
+
+                <h3>2.14. Contrato OpenAPI (snippet)</h3>
+                <pre><code>openapi: 3.0.0
+paths:
+    /api/v2/nfe/:
+        post:
+            summary: Criar/Pré-registrar NFe
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                movimentacao_id:
+                                    type: integer
+                                emitir:
+                                    type: boolean
+            responses:
+                '201':
+                    description: Nota criada
+</code></pre>
+
+                <h3>2.15. Exemplos de uso (cURL)</h3>
+                <pre><code># Criar NFe (pré-registro)
+curl -X POST "https://seu-dominio/api/v2/nfe/" -H "Authorization: Token <TOKEN>" -H "Content-Type: application/json" -d '{"movimentacao_id":12345, "emitir": false}'
+
+# Disparar emissão
+curl -X POST "https://seu-dominio/api/v2/nfe/987/emitir/" -H "Authorization: Token <TOKEN>"
+</code></pre>
+
+                <h3>2.16. Migrations e deploy (comandos)</h3>
+                <pre><code># Gerar migration (Django)
+python manage.py makemigrations integracao
+python manage.py migrate
+
+# Rodar worker celery
+celery -A seu_projeto worker -l info -Q nfe
+</code></pre>
+
+                <h3>2.17. Resumo final — alinhamento com os pontos pedidos</h3>
+                <ul>
+                        <li>Estrutura da tabela NFe: incluí DDL e model Django com campos para salvar retorno da API.</li>
+                        <li>Tabela de logs: incluída (`integracao_lognfe` / model `LogNFe`) e vinculada via FK à NFe.</li>
+                        <li>Dados do emitente: indicado armazenamento em <code>core_perfilpropriedade</code> com mapeamento de campos.</li>
+                </ul>
+
+
         <h2>3. Fluxo de Integração</h2>
         <p>O processo de emissão de uma NFe segue o fluxo automatizado abaixo:</p>
         <div class="fluxograma">
@@ -429,7 +795,7 @@ class NFEService:
                 <tr>
                     <td><code>POST</code></td>
                     <td><code>/</code></td>
-                    <td>Cria um registro de Nota Fiscal (preparação).</td>
+                    <td>Cria um registro de Nota Fiscal (pré-registro). Ao processar a emissão, o retorno da API do provedor é persistido em <code>nota_fiscal.provedor_response</code> e registros de interação são gravados na tabela <code>log_nfe</code>.</td>
                 </tr>
                 <tr>
                     <td><code>GET</code></td>
