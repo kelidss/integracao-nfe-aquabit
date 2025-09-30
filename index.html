@@ -506,6 +506,64 @@ CREATE INDEX IF NOT EXISTS idx_nfe_logs_created_at ON nfe_logs(created_at);
                         <li>Inserir entradas em <code>nfe_logs</code> para cada tentativa/response, com <code>direction</code> = 'outbound' para o request e 'inbound' para a resposta do provedor.</li>
                 </ul>
 
+                        <h4>2.3.5. Detalhes do XML e retorno do provedor</h4>
+                        <p>O comportamento esperado das APIs provedoras geralmente envolve dois artefatos principais que precisamos persistir/trackear:</p>
+                        <ol>
+                                <li>O XML autorizado da NFe (arquivo padrão da SEFAZ) — contém todos os campos fiscais oficiais e o protocolo de autorização.</li>
+                                <li>O retorno da API do provedor (JSON/text) — resposta da integração com provedores como Revgás, que pode trazer metadados, status e um mirror do XML ou um link para download.</li>
+                        </ol>
+
+                        <h5>Exemplo simples de XML autorizado (trecho)</h5>
+                        <pre><code>&lt;nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe"&gt;
+            &lt;NFe&gt;
+                &lt;infNFe Id="NFe99999999999999999999999999999999999999999999" versao="4.00"&gt;
+                    &lt;ide&gt;&lt;nNF&gt;1234&lt;/nNF&gt;&lt;serie&gt;1&lt;/serie&gt;&lt;dhEmi&gt;2025-09-30T12:00:00-03:00&lt;/dhEmi&gt;&lt;/ide&gt;
+                    &lt;emit&gt;&lt;CNPJ&gt;00000000000000&lt;/CNPJ&gt;&lt;/emit&gt;
+                    &lt;dest&gt;&lt;CNPJ&gt;11111111111111&lt;/CNPJ&gt;&lt;/dest&gt;
+                    &lt;det&gt;...detalhes dos itens...</det&gt;
+                &lt;/infNFe&gt;
+            &lt;/NFe&gt;
+            &lt;protNFe&gt;&lt;infProt&gt;&lt;nProt&gt;202509300000000&lt;/nProt&gt;&lt;dhRecbto&gt;2025-09-30T12:00:10-03:00&lt;/dhRecbto&gt;&lt;/infProt&gt;&lt;/protNFe&gt;
+        &lt;/nfeProc&gt;</code></pre>
+
+                        <h5>Exemplo de JSON de retorno do provedor (provider_return)</h5>
+                        <pre><code>{
+            "status": "autorizada",
+            "codigo": 100,
+            "mensagem": "Autorizado o uso da NF-e",
+            "chave": "99999999999999999999999999999999999999999999",
+            "numero": "1234",
+            "serie": "1",
+            "protocolo": "202509300000000",
+            "dhRecbto": "2025-09-30T12:00:10-03:00",
+            "xml": "<nfeProc>...xml completo base64 ou texto...</nfeProc>",
+            "events": [
+                {"tipo":"autorizacao","codigo":100,"descricao":"Autorizado"}
+            ]
+        }
+        </code></pre>
+
+                        <h5>Mapeamento e recomendações</h5>
+                        <ul>
+                                <li>Salvar o XML autorizado: preferível salvar o <strong>XML</strong> como arquivo no storage (S3 / storage local) e guardar o caminho em uma coluna tipo <code>xml_path</code> ou em <code>xml_content</code> (TEXT) dependendo do volume. Se for armazenar no DB, use <code>xml_content TEXT</code> ou <code>xml_content BYTEA</code> (com compressão).</li>
+                                <li><code>provider_return</code> (JSONB): persistir o JSON completo em <code>nfe.provider_return</code> para auditoria. Crie um índice GIN se for executar consultas por chaves internas: <code>CREATE INDEX idx_nfe_provider_return_gin ON nfe USING gin (provider_return);</code></li>
+                                <li>Normalizar campos críticos: extraia para colunas separadas (ex.: <code>protocolo_autorizacao</code>, <code>numero</code>, <code>chave</code>, <code>provedor_status_code</code>) para consultas rápidas e filtros.</li>
+                                <li>Ao inserir logs (<code>nfe_logs</code>), salve ambos request/response como JSONB e registre <code>status_code</code> e eventual stack em <code>error</code>.</li>
+                                <li>Se o provedor retornar o XML inline (como no exemplo), prefira salvá-lo no storage e referenciar; mantenha também uma cópia reduzida/assinada no DB se necessário para recuperação rápida.</li>
+                                <li>Mascaramento: remova ou mascare segredos/tokens antes de persistir logs visíveis (ex.: bearer tokens, senhas).</li>
+                                <li>Valide tamanho: se <code>provider_return</code> for muito grande, avalie armazenar apenas metadados no JSONB e mover o body completo para arquivos em storage referenciados por URL no JSON.</li>
+                        </ul>
+
+                        <h5>Consultas e extração (exemplos)</h5>
+                        <pre><code>-- Buscar NFe por protocolo dentro do JSONB
+        SELECT * FROM nfe WHERE provider_return->> 'protocolo' = '202509300000000';
+
+        -- Índice GIN para buscas em provider_return
+        CREATE INDEX IF NOT EXISTS idx_nfe_provider_return_gin ON nfe USING gin (provider_return);
+        </code></pre>
+
+                        <p>Com essas informações adicionadas, a equipe responsável pela API poderá padronizar os campos retornados pelos adapters (por exemplo: sempre retornar <code>chave</code>, <code>numero</code>, <code>protocolo</code>, <code>xml</code> ou <code>xml_url</code>). Se quiser, eu atualizo as partes do documento que descrevem os adapters (ex.: pseudo-código do Revgás) para refletir esse contrato de retorno padronizado.</p>
+
         <h3>2.4. Contrato da API (API v2)</h3>
         <p>Documentação mínima dos endpoints principais com exemplos de request/response.</p>
 
