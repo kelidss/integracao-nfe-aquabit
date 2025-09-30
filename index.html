@@ -101,18 +101,18 @@
     <div class="container">
         <h1>Documentação Técnica: Integração de Nota Fiscal Eletrônica (NFe) no Sistema Aquabit</h1>
         <p class="meta-info">
-            <strong>Versão:</strong> 1.0 | <strong>Data:</strong> 26 de Setembro de 2025
+            <strong>Versão:</strong> 2.0 | <strong>Data:</strong> 30 de Setembro de 2025
         </p>
 
         <hr>
 
         <h2>1. Visão Geral</h2>
-        <p>Este documento detalha a arquitetura e o plano de implementação para a integração de sistemas de emissão de Nota Fiscal Eletrônica (NFe) na plataforma Aquabit. O objetivo é automatizar e gerenciar o ciclo de vida das notas fiscais geradas a partir de vendas no sistema.</p>
+        <p>Este documento detalha a arquitetura e o plano de implementação para a integração de sistemas de emissão de Nota Fiscal Eletrônica (NFe) na plataforma Aquabit. O objetivo é automatizar e gerenciar o ciclo de vida das notas fiscais geradas a partir de <strong>movimentações financeiras</strong> registradas no sistema.</p>
 
         <h3>1.1. Objetivos Principais</h3>
         <ul>
-            <li><strong>Automatizar a Emissão:</strong> Gerar NFes automaticamente para todas as vendas concluídas na plataforma.</li>
-            <li><strong>Múltiplos Provedores:</strong> Garantir flexibilidade através da integração com diversos provedores de NFe, incluindo <strong>Nuvem Fiscal</strong>, <strong>Focus NFe</strong> e <strong>Revgás</strong>.</li>
+            <li><strong>Automatizar a Emissão:</strong> Gerar NFes automaticamente para todas as movimentações financeiras concluídas na plataforma.</li>
+            <li><strong>Integração com Revgás:</strong> Integração dedicada com o provedor <strong>Revgás</strong> para atender as necessidades específicas do setor de combustíveis.</li>
             <li><strong>Gestão Completa:</strong> Permitir a consulta de status, listagem e o download do Documento Auxiliar da Nota Fiscal Eletrônica (DANFE) e do arquivo XML.</li>
             <li><strong>Rastreabilidade:</strong> Manter um histórico detalhado e logs completos de todas as transações fiscais para auditoria e controle.</li>
         </ul>
@@ -129,25 +129,170 @@
             <tbody>
                 <tr>
                     <td><code>core_movimentacao</code></td>
-                    <td>Armazena as movimentações financeiras gerais das vendas.</td>
+                    <td>Armazena as movimentações financeiras - <strong>fonte principal para emissão de NFe</strong>.</td>
                 </tr>
                 <tr>
                     <td><code>core_movimentacaoitem</code></td>
-                    <td>Detalha os itens específicos de cada movimentação.</td>
+                    <td>Detalha os itens específicos de cada movimentação com quantidades e valores.</td>
                 </tr>
                 <tr>
-                    <td><code>core_venda</code></td>
-                    <td>Contém os dados específicos e consolidados de cada venda.</td>
+                    <td><code>core_categoria</code></td>
+                    <td>Define as categorias de produtos/combustíveis - <strong>substitui a tabela de produtos</strong>.</td>
                 </tr>
                 <tr>
-                    <td><code>core_lotetanquevenda</code></td>
-                    <td>Associa os produtos vendidos aos seus respectivos lotes e tanques.</td>
+                    <td><code>core_cliente</code></td>
+                    <td>Dados dos clientes necessários para emissão da NFe (CNPJ/CPF, endereço, etc.).</td>
                 </tr>
             </tbody>
         </table>
 
+        <h3>1.3. Análise dos Requisitos Mínimos para Emissão de NFe</h3>
+        <p>Para garantir a conformidade fiscal e a correta emissão das NFes, é necessário analisar as tabelas existentes e identificar os campos obrigatórios. Abaixo estão os requisitos mínimos organizados por categoria:</p>
+
+        <h4>1.3.1. Dados do Emitente (Obrigatórios)</h4>
+        <p>Estes dados devem estar configurados na propriedade/empresa:</p>
+        <ul>
+            <li><strong>CNPJ:</strong> Cadastro Nacional da Pessoa Jurídica do emitente</li>
+            <li><strong>Inscrição Estadual:</strong> Para identificação fiscal estadual</li>
+            <li><strong>Razão Social:</strong> Nome oficial da empresa</li>
+            <li><strong>Endereço Completo:</strong> Logradouro, número, bairro, cidade, CEP, UF</li>
+            <li><strong>Regime Tributário:</strong> Simples Nacional, Lucro Presumido, etc.</li>
+        </ul>
+
+        <h4>1.3.2. Dados do Destinatário (Cliente) - Tabela <code>core_cliente</code></h4>
+        <p>Campos necessários que devem estar presentes ou ser adicionados:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Campo Necessário</th>
+                    <th>Obrigatório</th>
+                    <th>Observações</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>CNPJ/CPF</td>
+                    <td>Sim</td>
+                    <td>Documento de identificação fiscal</td>
+                </tr>
+                <tr>
+                    <td>Nome/Razão Social</td>
+                    <td>Sim</td>
+                    <td>Identificação do cliente</td>
+                </tr>
+                <tr>
+                    <td>Logradouro</td>
+                    <td>Sim</td>
+                    <td>Endereço para entrega/cobrança</td>
+                </tr>
+                <tr>
+                    <td>Número</td>
+                    <td>Sim</td>
+                    <td>Número do endereço</td>
+                </tr>
+                <tr>
+                    <td>Bairro</td>
+                    <td>Sim</td>
+                    <td>Bairro do endereço</td>
+                </tr>
+                <tr>
+                    <td>Cidade</td>
+                    <td>Sim</td>
+                    <td>Município do endereço</td>
+                </tr>
+                <tr>
+                    <td>CEP</td>
+                    <td>Sim</td>
+                    <td>Código postal</td>
+                </tr>
+                <tr>
+                    <td>UF</td>
+                    <td>Sim</td>
+                    <td>Unidade federativa</td>
+                </tr>
+                <tr>
+                    <td>Inscrição Estadual</td>
+                    <td>Não*</td>
+                    <td>*Obrigatório para pessoas jurídicas contribuintes</td>
+                </tr>
+                <tr>
+                    <td>Email</td>
+                    <td>Não</td>
+                    <td>Para envio automático da NFe</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h4>1.3.3. Dados dos Produtos/Serviços - Tabela <code>core_categoria</code></h4>
+        <p>Como não há tabela de produtos, a tabela <code>core_categoria</code> deve conter:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Campo Necessário</th>
+                    <th>Obrigatório</th>
+                    <th>Observações</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Código NCM</td>
+                    <td>Sim</td>
+                    <td>Nomenclatura Comum do Mercosul</td>
+                </tr>
+                <tr>
+                    <td>Descrição</td>
+                    <td>Sim</td>
+                    <td>Descrição detalhada do produto/combustível</td>
+                </tr>
+                <tr>
+                    <td>Unidade de Medida</td>
+                    <td>Sim</td>
+                    <td>L (litros), KG, UN, etc.</td>
+                </tr>
+                <tr>
+                    <td>CFOP</td>
+                    <td>Sim</td>
+                    <td>Código Fiscal de Operações e Prestações</td>
+                </tr>
+                <tr>
+                    <td>Alíquota ICMS</td>
+                    <td>Sim</td>
+                    <td>Percentual do ICMS para o produto</td>
+                </tr>
+                <tr>
+                    <td>CST/CSOSN</td>
+                    <td>Sim</td>
+                    <td>Código de Situação Tributária</td>
+                </tr>
+                <tr>
+                    <td>Código ANP</td>
+                    <td>Sim*</td>
+                    <td>*Obrigatório para combustíveis</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h4>1.3.4. Dados da Movimentação - Tabelas <code>core_movimentacao</code> e <code>core_movimentacaoitem</code></h4>
+        <p>Informações necessárias para compor a NFe:</p>
+        <ul>
+            <li><strong>Data da Operação:</strong> Data e hora da movimentação</li>
+            <li><strong>Valor Total:</strong> Valor total da operação</li>
+            <li><strong>Quantidade:</strong> Quantidade de cada item (em <code>core_movimentacaoitem</code>)</li>
+            <li><strong>Valor Unitário:</strong> Preço unitário de cada item</li>
+            <li><strong>Valor Total do Item:</strong> Quantidade × Valor Unitário</li>
+        </ul>
+
+        <h4>1.3.5. Campos Recomendados para Implementação</h4>
+        <p>Para uma integração completa com a Revgás, sugerimos a criação/validação dos seguintes campos:</p>
+        <ol>
+            <li><strong>Na tabela cliente:</strong> Validar se todos os campos de endereço estão presentes e obrigatórios</li>
+            <li><strong>Na tabela categoria:</strong> Adicionar campos específicos para tributação (NCM, CFOP, CST, etc.)</li>
+            <li><strong>Na tabela propriedade:</strong> Garantir que dados fiscais da empresa estão completos</li>
+            <li><strong>Configuração de série e numeração:</strong> Sistema para controle sequencial das NFes</li>
+        </ol>
+
         <h2>2. Arquitetura da Solução</h2>
-        <p>A solução foi desenhada de forma modular, utilizando uma arquitetura baseada em <strong>Models</strong>, <strong>Services</strong> e <strong>Adapters</strong> para garantir escalabilidade e fácil manutenção.</p>
+        <p>A solução foi desenhada de forma modular, utilizando uma arquitetura baseada em <strong>Models</strong>, <strong>Services</strong> e <strong>Adapters</strong> para garantir escalabilidade e fácil manutenção. A integração inicial foca exclusivamente no provedor <strong>Revgás</strong>, especializado no setor de combustíveis.</p>
 
         <h3>2.1. Estrutura de Models</h3>
         <p>Os <code>models</code> abaixo representam a estrutura de dados no banco de dados para gerenciar provedores, configurações, notas fiscais e logs.</p>
@@ -179,7 +324,7 @@ class NotaFiscal(BaseClass):
     Registra cada NFe emitida, seu status, chave de acesso e
     armazena os arquivos XML e DANFE.
     """
-    venda = models.ForeignKey('core.Venda', on_delete=models.CASCADE)
+    movimentacao = models.ForeignKey('core.Movimentacao', on_delete=models.CASCADE)
     provedor = models.ForeignKey(ProvedorNFe, on_delete=models.CASCADE)
     numero_nota = models.CharField(max_length=50)
     serie = models.CharField(max_length=10)
@@ -218,24 +363,22 @@ class NFEService:
     def _get_adapter(self):
         """
         Factory Method que instancia o adapter correto com base
-        no provedor configurado.
+        no provedor configurado. Atualmente suporta apenas Revgás.
         """
         adapters = {
-            'nuvem-fiscal': NuvemFiscalAdapter,
-            'focus-nfe': FocusNFeAdapter,
             'revgas': RevgasAdapter,
         }
         adapter_class = adapters.get(self.configuracao.provedor.slug)
         if not adapter_class:
-            raise ValueError("Provedor de NFe não suportado.")
+            raise ValueError("Provedor de NFe não suportado. Apenas Revgás é suportado atualmente.")
         return adapter_class(self.configuracao)
 
-    def emitir_nfe(self, venda: Venda) -> NotaFiscal:
+    def emitir_nfe(self, movimentacao: Movimentacao) -> NotaFiscal:
         """
-        Coordena o processo de emissão de uma NFe para uma venda específica.
+        Coordena o processo de emissão de uma NFe para uma movimentação específica.
         """
         # ...lógica de negócio...
-        return self.adapter.emitir(venda)
+        return self.adapter.emitir(movimentacao)
 
     def consultar_nfe(self, nota_fiscal: NotaFiscal) -> dict:
         """
@@ -379,7 +522,7 @@ class NFEService:
                 <tr>
                     <td><code>NFE_DEFAULT_PROVIDER</code></td>
                     <td>Provedor padrão a ser utilizado.</td>
-                    <td><code>nuvem-fiscal</code></td>
+                    <td><code>revgas</code></td>
                 </tr>
                 <tr>
                     <td><code>NFE_TIMEOUT</code></td>
@@ -395,16 +538,6 @@ class NFEService:
                     <td><code>NFE_RETRY_DELAY</code></td>
                     <td>Atraso em segundos entre as tentativas.</td>
                     <td><code>5</code></td>
-                </tr>
-                <tr>
-                    <td><code>NUVEM_FISCAL_BASE_URL</code></td>
-                    <td>URL base da API da Nuvem Fiscal.</td>
-                    <td><code>https://api.nuvemfiscal.com.br</code></td>
-                </tr>
-                <tr>
-                    <td><code>FOCUS_NFE_BASE_URL</code></td>
-                    <td>URL base da API da Focus NFe.</td>
-                    <td><code>https://api.focusnfe.com.br</code></td>
                 </tr>
                 <tr>
                     <td><code>REVGAS_BASE_URL</code></td>
