@@ -647,6 +647,125 @@ def emitir_nfe_task(self, nota_id: int):
             <li>Política de retenção: manter logs de até 1 ano por padrão; exportar para storage frio se necessário.</li>
         </ul>
 
+        <h3>2.8. Webhooks (evitar polling)</h3>
+        <p>Quando o provedor oferece webhooks, é preferível utilizá-los para evitar tarefas que fazem polling contínuo do status. Abaixo uma especificação mínima para implementar um endpoint webhook seguro e idempotente.</p>
+
+        <h4>Endpoint sugerido</h4>
+        <p><code>POST /api/v2/nfe/webhook/</code></p>
+
+        <h4>Segurança</h4>
+        <ul>
+            <li>Validação de assinatura HMAC: o provedor deve enviar um cabeçalho como <code>X-Hub-Signature</code> ou <code>X-Signature</code> com HMAC do payload. Verifique utilizando a chave compartilhada armazenada em <code>ConfiguracaoNFe</code>.</li>
+            <li>Validade de IP (opcional): whitelist de IPs do provedor.</li>
+            <li>Idempotência: valide se o evento já foi processado (por exemplo, checando <code>evento_id</code> no payload ou usando <code>chave</code> + <code>protocolo</code>).</li>
+        </ul>
+
+        <h4>Payload mínimo esperado (exemplo)</h4>
+        <pre><code>{
+  "evento_id": "evt_abc123",
+  "chave": "99999999999999999999999999999999999999999999",
+  "tipo": "autorizacao|cancelamento|denegada",
+  "protocolo": "202509300000000",
+  "status": "autorizada",
+  "mensagem": "Autorizado o uso da NF-e",
+  "xml_url": "https://provedor/files/nfe/9999.xml", -- opcional
+  "xml_base64": "PD94bWwgdmVyc2lvbj0i..." -- opcional
+}
+</code></pre>
+
+        <h4>Comportamento do endpoint</h4>
+        <ol>
+            <li>Validar assinatura/IP.</li>
+            <li>Verificar se a NFe identificada por <code>chave</code> existe localmente; se existir, atualizar <code>nfe.provider_return</code>, <code>nfe.status</code> e <code>provider_return_received_at</code>, e gravar um registro em <code>nfe_logs</code> (direction='inbound').</li>
+            <li>Se não existir (protocolo chegou antes do registro local), criar um registro mínimo em <code>nfe</code> com <code>chave</code>, status e salvar o retorno; marcar uma flag <code>created_via_webhook=true</code> (opcional) para rastrear origem.</li>
+            <li>Responder rapidamente com 200 OK para o provedor assim que o evento for aceito/valido; se houver erro temporário (ex.: DB indisponível), responder 5xx para que o provedor reenvie.</li>
+        </ol>
+
+        <h4>Idempotência e duplicatas</h4>
+        <p>Use <code>evento_id</code> fornecido pelo provedor quando disponível para garantir que o mesmo evento não seja processado duas vezes. Caso não exista, gere um hash do payload e verifique um índice único em <code>nfe_logs(event_hash)</code> antes de inserir.</p>
+
+        <h3>2.9. Fail-safe: garantir persistência local mesmo em erro de integração</h3>
+        <p>Para evitar perda de dados caso a integração com o provedor falhe (timeout, erro 5xx, etc.), siga a estratégia abaixo:</p>
+
+        <h4>DDl atualizada (flags e campos de retry)</h4>
+        <pre><code>-- Extensão da tabela nfe com flags de controle
+ALTER TABLE nfe
+ADD COLUMN emitted BOOLEAN NOT NULL DEFAULT FALSE, -- indica se a NFe foi criada/autorizada no provedor
+ADD COLUMN external_sent BOOLEAN NOT NULL DEFAULT FALSE, -- indica se o payload foi enviado ao provedor
+ADD COLUMN external_attempts INTEGER NOT NULL DEFAULT 0, -- número de tentativas
+ADD COLUMN last_error TEXT; -- último erro ocorrido ao tentar integrar
+
+-- Índice para buscas de NFes pendentes de envio
+CREATE INDEX IF NOT EXISTS idx_nfe_pending_send ON nfe((external_sent = false) AND (external_attempts < 5));
+</code></pre>
+
+        <h4>Fluxo seguro (pseudocódigo)</h4>
+        <pre><code># Pseudocódigo simplificado (ex: endpoint POST /api/v2/nfe/)
+def criar_nfe(payload):
+    # 1) Persistir localmente antes de qualquer tentativa externa
+    nfe = db.insert('nfe', {
+        'chave': payload.chave,
+        'movimentacao_id': payload.movimentacao_id,
+        'status': 'pending',
+        'external_sent': False,
+        'external_attempts': 0
+    })
+
+    # 2) Tentar enviar para provedor de forma assíncrona (task/queue)
+    enqueue('emitir_nfe', {'nfe_id': nfe.id})
+
+    return nfe
+
+# Worker/Task emitir_nfe
+def emitir_nfe_task(nfe_id):
+    nfe = db.get('nfe', nfe_id)
+    try:
+        # marcar tentativa
+        db.update('nfe', nfe_id, {'external_attempts': nfe.external_attempts + 1})
+
+        # enviar para provedor
+        resp = provedor.emitir(nfe)
+
+        # salvar retorno e marcar como enviado
+        db.update('nfe', nfe_id, {
+            'provider_return': resp.json(),
+            'provider_return_received_at': now(),
+            'external_sent': True,
+            'emitted': resp.is_autorizada(),
+            'status': resp.status_label(),
+            'last_error': None
+        })
+        db.insert('nfe_logs', {...})
+    except TransientError as e:
+        db.update('nfe', nfe_id, {'last_error': str(e)})
+        # requeue/retry controlado pelo worker (exponential backoff)
+        raise
+    except Exception as e:
+        db.update('nfe', nfe_id, {'last_error': str(e)})
+        db.insert('nfe_logs', {...})
+        # não perde o registro local; pode expor endpoint de retry manual
+
+# Endpoint de retry administrativo
+POST /api/v2/nfe/{id}/retry/ -> enfileira novamente emitir_nfe_task se external_attempts < MAX
+</code></pre>
+
+        <h4>Endpoint de retry manual</h4>
+        <p>Um endpoint administrativo pode ser exposto para re-tentar envio de NFes que falharam automaticamente. Regras sugeridas:</p>
+        <ul>
+            <li>Somente usuários com permissão podem chamar.</li>
+            <li>Verificar <code>external_attempts</code> e limitar re-execuções (ex.: max 5 tentativas).</li>
+            <li>Registrar no <code>nfe_logs</code> quem disparou o retry e por quê.</li>
+        </ul>
+
+        <h4>Comportamento em caso de falha</h4>
+        <ul>
+            <li>Não deletar o registro local da NFe: manter para auditoria e reprocessamento.</li>
+            <li>Marcar campos auxiliares (<code>last_error</code>, <code>external_attempts</code>) para monitoramento e alertas.</li>
+            <li>Se o provedor confirmar posteriormente via webhook, reconciliar os dados e limpar flags de retry.</li>
+        </ul>
+
+
+
         <h3>2.8. Mapeamento core_movimentacao → XML NFe (exemplo)</h3>
         <p>Mapeie campos da sua movimentação para as tags da NFe:</p>
         <ul>
